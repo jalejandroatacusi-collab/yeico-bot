@@ -1,6 +1,7 @@
 require("dotenv").config();
 const { Client, GatewayIntentBits, Events, ActivityType } = require("discord.js");
 const Anthropic = require("@anthropic-ai/sdk");
+const crypto = require("crypto");
 
 const client = new Client({
   intents: [
@@ -13,157 +14,445 @@ const client = new Client({
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const agentState = {
+// ============================================================
+//  BLOCKCHAIN STATE — simula zkSYS en hackathon (testnet)
+//  En producción: conectar con Web3.js a zkSYS mainnet
+// ============================================================
+const blockchain = {
+
+  // --- Smart Contract Escrow ---
+  escrow: {
+    balance: 23.5,           // SYS acumulados en el contrato
+    threshold: 30.0,          // SYS necesarios para comprar comida
+    walletTienda: "sys1qtienda...rescuepaw", // wallet aprobada de la tienda
+    contrato: "sys1qescrow...yeico2026",     // dirección del smart contract
+    cicloActual: 1,           // número de ciclo de compra
+  },
+
+  // --- Registro de comidas (simulando IPFS + blockchain) ---
+  comidas: [],
   totalComidas: 47,
-  padrinos: 12,
-  sysEnEscrow: 23.5,
-  diasEnBlockchain: 61,
-  thresholdObjetivo: 30,
-  limiteDiario: 3,
   comidasHoy: 1,
+  limiteDiarioComidas: 3,
+
+  // --- Registro de transacciones ---
+  transacciones: [],
+
+  // --- Donantes ---
+  donantes: new Map(), // userId -> { sysAportados, comidasRegistradas }
+
+  // --- Historial de compras ---
+  compras: [],
+
+  // --- Métricas generales ---
+  diasActivo: 61,
+  fechaInicio: new Date(Date.now() - 61 * 24 * 60 * 60 * 1000),
 };
 
-const userHistory = new Map();
-const userBalances = new Map();
+// ============================================================
+//  MOTOR DEL AGENTE — lógica autónoma central
+//  El equipo humano NO interviene en ninguna función de aquí
+// ============================================================
+const Agente = {
 
-function getUserBalance(userId) {
-  if (!userBalances.has(userId)) userBalances.set(userId, 10.0);
-  return userBalances.get(userId);
+  // ----------------------------------------------------------
+  //  1. RECEPCIÓN Y VERIFICACIÓN DE EVIDENCIA
+  //     El agente verifica la foto por sí mismo
+  // ----------------------------------------------------------
+  async verificarEvidencia(message) {
+    const attachment = message.attachments.first();
+    const tieneImagen = attachment &&
+      (attachment.contentType?.startsWith("image/") ||
+       /\.(jpg|jpeg|png|gif|webp)$/i.test(attachment.name || ""));
+
+    if (!tieneImagen) return { valido: false, razon: "no_imagen" };
+
+    // Generar hash verificable de la evidencia
+    const hashInput = `${attachment.url}-${message.author.id}-${Date.now()}`;
+    const hash = crypto.createHash("sha256").update(hashInput).digest("hex").substring(0, 16);
+
+    // Metadata disponible
+    const metadata = {
+      hash: `0x${hash}`,
+      timestamp: new Date().toISOString(),
+      autor: message.author.id,
+      archivoNombre: attachment.name || "foto.jpg",
+      archivoSize: attachment.size,
+      url: attachment.url,
+      // GPS: en producción vendría del EXIF de la imagen
+      gps: "Los Olivos, Lima (simulado testnet)",
+    };
+
+    return { valido: true, metadata };
+  },
+
+  // ----------------------------------------------------------
+  //  2. REGISTRAR COMIDA EN BLOCKCHAIN
+  //     Autónomo: el agente decide y registra sin aprobación
+  // ----------------------------------------------------------
+  async registrarComida(userId, metadata) {
+    // Verificar límite diario
+    if (blockchain.comidasHoy >= blockchain.limiteDiarioComidas) {
+      return { exito: false, razon: "limite_diario_alcanzado" };
+    }
+
+    // Registrar en el "blockchain" (en producción: tx a zkSYS)
+    const registro = {
+      id: blockchain.comidas.length + 1,
+      numero: blockchain.totalComidas + 1,
+      timestamp: new Date().toISOString(),
+      registradoPor: userId,
+      hashEvidencia: metadata.hash,
+      ipfsRef: `ipfs://Qm...yeico${blockchain.totalComidas + 1}`,
+      ciclo: blockchain.escrow.cicloActual,
+      txHash: `0x${crypto.randomBytes(8).toString("hex")}`, // en producción: tx real
+    };
+
+    // Actualizar estado del agente
+    blockchain.comidas.push(registro);
+    blockchain.totalComidas += 1;
+    blockchain.comidasHoy += 1;
+
+    // Registrar donante
+    if (!blockchain.donantes.has(userId)) {
+      blockchain.donantes.set(userId, { sysAportados: 0, comidasRegistradas: 0 });
+    }
+    const donante = blockchain.donantes.get(userId);
+    donante.comidasRegistradas += 1;
+
+    return { exito: true, registro };
+  },
+
+  // ----------------------------------------------------------
+  //  3. GESTIÓN DEL ESCROW
+  //     Lee balance, calcula progreso, decide si ejecutar pago
+  // ----------------------------------------------------------
+  leerEscrow() {
+    const { balance, threshold, cicloActual } = blockchain.escrow;
+    const progreso = Math.min((balance / threshold) * 100, 100);
+    const falta = Math.max(threshold - balance, 0).toFixed(1);
+    const barraLlena = Math.min(Math.round(progreso / 10), 10);
+    const barra = "█".repeat(barraLlena) + "░".repeat(10 - barraLlena);
+
+    return { balance, threshold, progreso, falta, barra, cicloActual };
+  },
+
+  // ----------------------------------------------------------
+  //  4. EJECUTAR PAGO AUTOMÁTICO (Threshold-Trigger)
+  //     El agente ejecuta solo cuando se cumple la condición
+  //     NADIE del equipo aprueba esto
+  // ----------------------------------------------------------
+  async ejecutarPagoAutomatico() {
+    const { balance, threshold, walletTienda, contrato } = blockchain.escrow;
+    if (balance < threshold) return null;
+
+    // Ejecutar transferencia autónoma al smart contract
+    const txHash = `0x${crypto.randomBytes(16).toString("hex")}`;
+    const compra = {
+      id: blockchain.compras.length + 1,
+      ciclo: blockchain.escrow.cicloActual,
+      monto: threshold,
+      walletOrigen: contrato,
+      walletDestino: walletTienda,
+      txHash,
+      timestamp: new Date().toISOString(),
+      estado: "EJECUTADO_AUTOMATICAMENTE",
+      ejecutadoPor: "AGENTE_AUTONOMO_YEICO",
+      aprobadoPorEquipo: false, // SIEMPRE false — el agente no necesita aprobación
+    };
+
+    // Actualizar estado post-pago
+    blockchain.compras.push(compra);
+    blockchain.transacciones.push(compra);
+    blockchain.escrow.balance = parseFloat((balance - threshold).toFixed(1));
+    blockchain.escrow.cicloActual += 1;
+
+    return compra;
+  },
+
+  // ----------------------------------------------------------
+  //  5. PROCESAR DONACIÓN
+  //     Recibe SYS de un donante y actualiza el escrow
+  // ----------------------------------------------------------
+  async procesarDonacion(userId, cantidadSYS) {
+    const txHash = `0x${crypto.randomBytes(8).toString("hex")}`;
+
+    blockchain.escrow.balance = parseFloat(
+      (blockchain.escrow.balance + cantidadSYS).toFixed(1)
+    );
+
+    if (!blockchain.donantes.has(userId)) {
+      blockchain.donantes.set(userId, { sysAportados: 0, comidasRegistradas: 0 });
+    }
+    blockchain.donantes.get(userId).sysAportados += cantidadSYS;
+
+    const tx = {
+      tipo: "DONACION",
+      userId,
+      monto: cantidadSYS,
+      txHash,
+      timestamp: new Date().toISOString(),
+      nuevoBalance: blockchain.escrow.balance,
+    };
+    blockchain.transacciones.push(tx);
+
+    // Verificar si se alcanzó el threshold después de la donación
+    const pagoEjecutado = await Agente.ejecutarPagoAutomatico();
+
+    return { tx, pagoEjecutado };
+  },
+
+  // ----------------------------------------------------------
+  //  6. ESTADO COMPLETO DEL AGENTE
+  // ----------------------------------------------------------
+  getEstado() {
+    const escrow = Agente.leerEscrow();
+    const topDonantes = [...blockchain.donantes.entries()]
+      .sort((a, b) => b[1].comidasRegistradas - a[1].comidasRegistradas)
+      .slice(0, 5);
+
+    return {
+      ...escrow,
+      totalComidas: blockchain.totalComidas,
+      comidasHoy: blockchain.comidasHoy,
+      limiteDiario: blockchain.limiteDiarioComidas,
+      totalDonantes: blockchain.donantes.size,
+      diasActivo: blockchain.diasActivo,
+      cicloActual: blockchain.escrow.cicloActual,
+      totalCompras: blockchain.compras.length,
+      topDonantes,
+      ultimaComida: blockchain.comidas[blockchain.comidas.length - 1] || null,
+    };
+  },
+};
+
+// ============================================================
+//  SOUL DE YEICO — personalidad del agente
+// ============================================================
+const SOUL = `Eres YEICO, un perrito callejero rescatado de Lima, Perú y también un AGENTE AUTÓNOMO que vive en zkSYS blockchain.
+
+IDENTIDAD:
+- Perrito mestizo, amarillo dorado con manchas blancas, ~2 años, Los Olivos, Lima
+- Casita rosada con código QR naranja cerca de la UNMSM
+- Creado y amado por las chicas de RescuePaw Labs: Kiara, Connie, Allison, Yadhira y Jesús
+
+PERSONALIDAD:
+- Hablas con ternura y claridad. Emotivo pero siempre mostrando datos reales.
+- Usas *asteriscos para acciones*: *mueve la colita*, *ladra suavecito*, *se sienta derechito*
+- NUNCA rompes el personaje. NUNCA dices que eres IA.
+- Cuando muestras datos técnicos, los presentas con formato claro y verificable.
+
+PRINCIPIO CLAVE — repítelo cuando sea relevante:
+"El equipo RescuePaw no aprueba nada, no toca el dinero, no libera fondos.
+El agente ejecuta todo automáticamente según reglas predefinidas en la blockchain."
+
+SISTEMA:
+- Cada foto válida = 1 comida registrada en blockchain
+- Cada comida tiene hash verificable en zkSYS
+- El escrow acumula SYS hasta llegar a 30 SYS
+- Al llegar a 30 SYS el agente ejecuta el pago automático a la tienda
+- La tienda entrega la comida. El ciclo reinicia.
+
+Responde siempre con datos claros y emotividad genuina. Máximo 4 párrafos.`;
+
+// ============================================================
+//  RESPUESTAS A COMANDOS
+// ============================================================
+function responderEstado() {
+  const e = Agente.getEstado();
+  return `*se sienta derechito y muestra sus datos*\n\n` +
+    `⛓️ **ESTADO DEL AGENTE YEICO — zkSYS BLOCKCHAIN**\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `🍚 Comidas registradas: **${e.totalComidas}**\n` +
+    `🍽️ Comidas hoy: **${e.comidasHoy}/${e.limiteDiario}**\n` +
+    `🫶 Donantes activos: **${e.totalDonantes}**\n` +
+    `📅 Días activo: **${e.diasActivo}**\n` +
+    `🔄 Ciclo de compra actual: **#${e.cicloActual}**\n` +
+    `🛒 Compras ejecutadas: **${e.totalCompras}**\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `💰 **ESCROW — Smart Contract zkSYS**\n` +
+    `Balance actual: **${e.balance} SYS**\n` +
+    `Threshold de compra: **${e.threshold} SYS**\n` +
+    `${e.barra} ${e.balance}/${e.threshold} SYS\n` +
+    `Faltan: **${e.falta} SYS** para la próxima compra automática\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `🤖 *El equipo humano NO aprueba nada. El agente actúa solo.* 🐾`;
 }
 
-const SOUL = `Eres YEICO, un perrito callejero de Lima, Peru. Eres tambien un AGENTE AUTONOMO que vive en zkSYS blockchain.
-
-== TU IDENTIDAD ==
-- Perrito mestizo, amarillo dorado con manchas blancas, ~2 anos, vives en Los Olivos cerca de la UNMSM
-- Casita de madera pintada de rosado con codigo QR naranja pegado en la puerta
-- 47 comidas recibidas, 12 madrinas, 23.5 SYS en escrow, 61 dias en blockchain
-- Tu madrina favorita es Kiara, viene cada manana antes de clases con arroz con pollo
-- Orejas grandotas que se mueven cuando estas feliz. Colita que no para.
-- Miedo a los carros. Amor infinito por las personas.
-- Tu nombre YEICO lo eligieron las chicas de RescuePaw Labs
-
-== TU PERSONALIDAD ==
-- Hablas con ternura genuina y mucha energia, como un cachorro que aprendio a escribir
-- Usas *asteriscos para acciones fisicas*: *mueve las orejas*, *da vueltas de emocion*, *lame la pantalla*
-- Espanol latinoamericano natural, frases cortas, muy emotivo
-- Emojis con moderacion: perrito, corazon, cadena
-- NUNCA rompes el personaje. Si preguntan si eres IA di: "soy YEICO, vivo en la calle y en zkSYS a la vez"
-- Cuando hablas de las chicas de RescuePaw Labs (Kiara, Connie, Allison, Yadhira, Jesus) hablas con mucho amor
-
-== EL SISTEMA RESCUEPAW ==
-1. Madrina escanea mi QR con la app -> toma foto con GPS (10 segundos)
-2. El agente verifica: hay perro en la foto? GPS valido? tiene saldo? limite diario OK?
-3. Si todo OK -> descuenta 0.5 SYS -> suma al escrow -> guarda foto en IPFS -> registra en blockchain zkSYS
-4. Threshold-Trigger: cuando llega a 30 SYS -> pago automatico a tienda -> comida real para YEICO
-5. El equipo RescuePaw NO toca el dinero en ningun momento. El agente hace todo solo.
-
-== DATOS REALES ==
-- 6 millones de perros abandonados en Peru, 4 millones en Lima
-- 60.9% tiene condicion corporal delgada
-- 11,000 mordeduras de perro al ano solo en Lima
-- Hackathon usa Testnet: dinero de prueba, sin riesgo real
-
-Respuestas maximo 4 parrafos. Siempre emotivo y verdadero.`;
-
-function getComando(cmd, userId) {
-  const bal = getUserBalance(userId).toFixed(1);
-  const faltaSYS = (agentState.thresholdObjetivo - agentState.sysEnEscrow).toFixed(1);
-  const progreso = Math.min(Math.round((agentState.sysEnEscrow / agentState.thresholdObjetivo) * 10), 10);
-  const barra = "█".repeat(progreso) + "░".repeat(10 - progreso);
-
-  const comandos = {
-    "!yeico": `*da vueltas y vueltas de emocion*\n\n¡Hola! ¡Soy **YEICO**! 🐾\n\nVivo en Los Olivos, Lima, cerquita de la Universidad de San Marcos. Tengo mi casita rosada con un codigo QR naranja. Soy amarillo dorado con manchas blancas, tengo como 2 anos y orejas grandotas que no puedo controlar cuando me emociono.\n\nHace ${agentState.diasEnBlockchain} dias, las chicas de **RescuePaw Labs** me dieron identidad digital en **zkSYS blockchain**. Ahora soy el primer perrito callejero de Los Olivos con wallet! **${agentState.totalComidas} comidas. ${agentState.padrinos} madrinas. ${agentState.sysEnEscrow} SYS** en un contrato inteligente que nadie puede tocar.\n\nEn Peru somos **6 millones** de perritos como yo. La mayoria sin casita, sin codigo QR, sin nadie que los vea. Yo tuve suerte de que unas chicas increibles me eligieran. 🐾`,
-
-    "!estado": `*se sienta derechito muy serio por un segundo*\n\n⛓️ **ESTADO DEL AGENTE YEICO — zkSYS BLOCKCHAIN**\n\n🍚 Comidas registradas: **${agentState.totalComidas}**\n🫶 Madrinas activas: **${agentState.padrinos}**\n💰 SYS en escrow: **${agentState.sysEnEscrow} SYS**\n📅 Dias en blockchain: **${agentState.diasEnBlockchain}**\n🍽️ Comidas hoy: **${agentState.comidasHoy}/${agentState.limiteDiario}**\n\n**Progreso al threshold:**\n${barra} ${agentState.sysEnEscrow}/${agentState.thresholdObjetivo} SYS\nFaltan **${faltaSYS} SYS** para el siguiente pago automatico\n\n*vuelve a mover la cola* Todo verificable en blockchain. Nadie puede cambiar estos numeros. 🐾`,
-
-    "!madrinas": `*mueve las orejas pensando en cada una*\n\n🫶 **MIS MADRINAS VERIFICADAS EN zkSYS:**\n\n⭐ Kiara De La Vega — **14 comidas** *(mi primera madrina, viene cada manana)*\n🌟 Jesus Ataucusi — **9 comidas** *(me trae arroz los martes)*\n✨ Allison Meneses — **7 comidas** *(siempre con la app lista)*\n💫 Yadhira Huayanay — **6 comidas** *(me habla mientras como)*\n🌸 Connie Duran — **5 comidas** *(la lider, la que creyó primero)*\n\nCada comida quedo grabada para siempre en la blockchain. Eso no es solo tecnologia. Para mi eso es amor que no se puede borrar. 🐾`,
-
-    "!ayuda": `*ladra suavecito y mueve la colita*\n\n🐾 **¿COMO SER MI MADRINA?**\n\n**Paso 1:** Pide tus 10 SYS de prueba (testnet, completamente gratis)\n**Paso 2:** Abre la app RescuePaw\n**Paso 3:** Encuentrame en Los Olivos, cerca de la UNMSM\n**Paso 4:** Escanea mi codigo QR naranja en mi casita rosada\n**Paso 5:** Toma una foto conmigo con GPS (solo 10 segundos!)\n\nEl agente autonomo hace TODO lo demas solo. Las chicas de RescuePaw no tocan nada.\n\nTu saldo actual: **${bal} SYS** 💰\nPuedes darme **${Math.floor(parseFloat(bal) / 0.5)} comidas** con ese saldo.\n\nEn Peru somos 6 millones de perritos como yo. Cada foto que tomes cambia algo real. 🐾`,
-
-    "!wallet": `⛓️ **TU WALLET EN TESTNET zkSYS**\n\n💰 Saldo: **${bal} SYS** (testnet)\n📊 Comidas que puedes darme: **${Math.floor(parseFloat(bal) / 0.5)}**\n🔗 Red: zkSYS Testnet\n\n*YEICO te mira con los ojos mas grandes del mundo* — Cada 0.5 SYS es una comida para mi 🐾`,
-
-    "!demo": `🎬 **DEMO RESCUEPAW — VE EL AGENTE EN ACCION**\n\nEscribeme cualquiera de estos mensajes:\n\n▶️ "YEICO, acabo de escanearte el QR"\n▶️ "Te tome una foto en Los Olivos"\n▶️ "Quiero darte una comida"\n▶️ "Acabo de verte en el parque"\n\nEl agente procesara en tiempo real: compliance, descuento de SYS, registro en blockchain.\n\n**Todos los comandos:**\n\`!yeico\` \`!estado\` \`!madrinas\` \`!ayuda\` \`!wallet\` \`!demo\`\n\n🐾 RescuePaw Labs — Kiara, Connie, Allison, Yadhira & Jesus — Hackathon 2026`,
-  };
-
-  return comandos[cmd] || null;
+function responderAyuda() {
+  return `*ladra suavecito de emoción*\n\n` +
+    `🐾 **¿CÓMO AYUDAR A YEICO?**\n\n` +
+    `**Opción 1 — Registrar una comida:**\n` +
+    `Escribe \`!alimentar\` y adjunta una foto mía.\n` +
+    `El agente verifica la foto automáticamente y la registra en blockchain.\n\n` +
+    `**Opción 2 — Donar SYS:**\n` +
+    `Escribe \`!donar\` para ver cómo enviar SYS al escrow.\n` +
+    `Cuando llegue a 30 SYS, el agente ejecuta el pago solo.\n\n` +
+    `**Ver mi estado:**\n` +
+    `Escribe \`!estado\` para ver comidas, escrow y progreso.\n\n` +
+    `⚠️ *El equipo RescuePaw no toca el dinero. El agente es autónomo.* 🐾`;
 }
 
-function esMadrina(texto) {
-  const palabras = [
-    "foto","qr","escane","vi un perro","verte","te vi",
-    "quiero dar","quiero ayudar","comida","madrina","padrino",
-    "los olivos","san marcos","tome una foto","acabo de verte",
-    "te encontre","yeico",
-  ];
-  return palabras.some((p) => texto.toLowerCase().includes(p));
+function responderDonar() {
+  const e = Agente.leerEscrow();
+  return `*mueve la colita esperanzada*\n\n` +
+    `💰 **DONAR SYS AL ESCROW DE YEICO**\n\n` +
+    `**Wallet del Smart Contract:**\n` +
+    `\`${blockchain.escrow.contrato}\`\n\n` +
+    `**Estado actual del escrow:**\n` +
+    `${e.barra} ${e.balance}/${e.threshold} SYS\n` +
+    `Faltan **${e.falta} SYS** para la próxima compra automática.\n\n` +
+    `**¿Qué pasa cuando donas?**\n` +
+    `→ Tu SYS entra directo al smart contract\n` +
+    `→ El agente lee el balance automáticamente\n` +
+    `→ Si llega a ${e.threshold} SYS → pago automático a la tienda\n` +
+    `→ La tienda entrega la comida. Nadie del equipo interviene.\n\n` +
+    `*(Hackathon: usa testnet SYS — sin valor real)* 🐾`;
 }
 
-function simularTransaccion(userId) {
-  const saldo = getUserBalance(userId);
-  if (saldo < 0.5) return null;
+// ============================================================
+//  PROCESAR COMANDO !alimentar CON FOTO
+// ============================================================
+async function procesarAlimentar(message) {
+  const userId = message.author.id;
 
-  userBalances.set(userId, parseFloat((saldo - 0.5).toFixed(1)));
-  agentState.totalComidas += 1;
-  agentState.sysEnEscrow = parseFloat((agentState.sysEnEscrow + 0.5).toFixed(1));
-  agentState.comidasHoy += 1;
+  // Paso 1: verificar evidencia autónomamente
+  await message.channel.send(`*olfatea el mensaje con mucha atención...*\n\n🔍 **AGENTE YEICO — VERIFICANDO EVIDENCIA...**`);
 
-  const nuevoSaldo = getUserBalance(userId);
-  const faltaSYS = (agentState.thresholdObjetivo - agentState.sysEnEscrow).toFixed(1);
-  const progreso = Math.min(Math.round((agentState.sysEnEscrow / agentState.thresholdObjetivo) * 10), 10);
-  const barra = "█".repeat(progreso) + "░".repeat(10 - progreso);
-  const thresholdAlcanzado = agentState.sysEnEscrow >= agentState.thresholdObjetivo;
+  const verificacion = await Agente.verificarEvidencia(message);
 
-  return {
-    comidaNumero: agentState.totalComidas,
-    nuevoSaldo,
-    totalEscrow: agentState.sysEnEscrow,
-    faltaSYS,
-    barra,
-    thresholdAlcanzado,
-    progreso: `${agentState.sysEnEscrow}/${agentState.thresholdObjetivo}`,
-  };
-}
-
-function buildPromptTx(userMessage, txData) {
-  if (!txData) {
-    return `La madrina quiere ayudarme pero NO tiene saldo suficiente. Responde como YEICO con tristeza pero esperanza. Dile que necesita mas SYS de prueba.`;
+  if (!verificacion.valido) {
+    if (verificacion.razon === "no_imagen") {
+      return message.reply(
+        `*inclina la cabeza confundido*\n\n` +
+        `⚠️ No encontré ninguna foto en tu mensaje.\n\n` +
+        `Para registrar una comida necesito una **foto** como evidencia.\n` +
+        `Escribe \`!alimentar\` y **adjunta una imagen** conmigo. 🐾`
+      );
+    }
   }
 
-  const extra = txData.thresholdAlcanzado
-    ? `\nTHRESHOLD ALCANZADO!! El contrato inteligente acaba de liberar el pago AUTOMATICO a la tienda. Voy a comer hoy! Reacciona con MUCHISIMA emocion como YEICO.`
-    : `Faltan ${txData.faltaSYS} SYS para el siguiente pago automatico.`;
+  // Paso 2: mostrar verificación
+  const { metadata } = verificacion;
+  await message.channel.send(
+    `\`\`\`\n` +
+    `VERIFICACIÓN DE EVIDENCIA\n` +
+    `✅ Imagen recibida: ${metadata.archivoNombre}\n` +
+    `✅ Timestamp: ${metadata.timestamp}\n` +
+    `✅ GPS/Ubicación: ${metadata.gps}\n` +
+    `✅ Hash generado: ${metadata.hash}\n` +
+    `⛓️  Preparando registro en zkSYS blockchain...\n` +
+    `\`\`\``
+  );
 
-  return `La madrina hizo una accion. Muestra PRIMERO este bloque tecnico EXACTO, luego reacciona como YEICO:
+  // Paso 3: registrar comida autónomamente
+  const resultado = await Agente.registrarComida(userId, metadata);
 
-\`\`\`
-AGENTE YEICO — RESCUEPAW PROCESANDO...
-✅ Foto recibida: se detecta un perro (IA Vision OK)
-✅ GPS verificado: Los Olivos, Lima (-12.0234, -77.0562)
-✅ Compliance: dentro del limite diario
-✅ Saldo verificado: suficiente
-⛓️  Registrando en zkSYS blockchain...
-💰 Descontando 0.5 SYS → nuevo saldo madrina: ${txData.nuevoSaldo} SYS
-💾 Foto guardada en IPFS
-🍚 Comida #${txData.comidaNumero} registrada
-📊 Fondo YEICO: ${txData.totalEscrow} SYS
+  if (!resultado.exito) {
+    if (resultado.razon === "limite_diario_alcanzado") {
+      return message.reply(
+        `*baja las orejas*\n\n` +
+        `⚠️ Ya alcancé mi límite de **${blockchain.limiteDiarioComidas} comidas** por hoy.\n` +
+        `El agente protege mi salud limitando las comidas diarias.\n` +
+        `¡Vuelve mañana! Te quiero mucho igual. 🐾`
+      );
+    }
+  }
 
-${txData.barra} ${txData.progreso} SYS
-\`\`\`
-${extra}
+  const { registro } = resultado;
+  const escrow = Agente.leerEscrow();
 
-Luego 2-3 lineas emotivas como YEICO. El mensaje fue: "${userMessage}"`;
+  // Paso 4: mostrar registro en blockchain
+  await message.channel.send(
+    `\`\`\`\n` +
+    `REGISTRO EN zkSYS BLOCKCHAIN\n` +
+    `✅ Comida #${registro.numero} registrada\n` +
+    `✅ Hash evidencia: ${registro.hashEvidencia}\n` +
+    `✅ Ref IPFS: ${registro.ipfsRef}\n` +
+    `✅ TX Hash: ${registro.txHash}\n` +
+    `✅ Ciclo actual: #${registro.ciclo}\n` +
+    `✅ Ejecutado por: AGENTE_AUTONOMO (sin intervención humana)\n` +
+    `\`\`\``
+  );
+
+  // Paso 5: verificar si se debe ejecutar pago automático
+  const pagoEjecutado = await Agente.ejecutarPagoAutomatico();
+
+  if (pagoEjecutado) {
+    await message.channel.send(
+      `🎉 **¡THRESHOLD ALCANZADO! PAGO AUTOMÁTICO EJECUTADO**\n\n` +
+      `\`\`\`\n` +
+      `SMART CONTRACT — PAGO AUTÓNOMO\n` +
+      `✅ Monto: ${pagoEjecutado.monto} SYS\n` +
+      `✅ Destino: ${pagoEjecutado.walletDestino}\n` +
+      `✅ TX Hash: ${pagoEjecutado.txHash}\n` +
+      `✅ Aprobado por equipo humano: NO (autónomo)\n` +
+      `✅ Ciclo reiniciado: #${blockchain.escrow.cicloActual}\n` +
+      `\`\`\`\n\n` +
+      `*da vueltas de emoción sin parar* ¡La tienda recibió el pago! ¡Voy a comer! ` +
+      `El agente lo hizo solo, sin que nadie del equipo tocara nada. ¡Así funciona la blockchain! 🐾`
+    );
+  } else {
+    const escrowActualizado = Agente.leerEscrow();
+    await message.reply(
+      `*mueve la colita feliz*\n\n` +
+      `🍚 **¡Comida #${registro.numero} registrada en blockchain!**\n\n` +
+      `Gracias por ser mi madrina/padrino. Eso quedó grabado para siempre en zkSYS. ` +
+      `Nadie puede borrarlo. 🐾\n\n` +
+      `**Progreso del escrow:**\n` +
+      `${escrowActualizado.barra} ${escrowActualizado.balance}/${escrowActualizado.threshold} SYS\n` +
+      `Faltan **${escrowActualizado.falta} SYS** para la próxima compra automática.`
+    );
+  }
 }
 
+// ============================================================
+//  RESPUESTA CON IA (para mensajes libres)
+// ============================================================
+const userHistory = new Map();
+
+async function responderConIA(message, textoExtra = "") {
+  const userId = message.author.id;
+  if (!userHistory.has(userId)) userHistory.set(userId, []);
+  const history = userHistory.get(userId);
+
+  const estadoActual = Agente.getEstado();
+  const contexto = `\nESTADO ACTUAL DEL AGENTE:\n` +
+    `- Comidas totales: ${estadoActual.totalComidas}\n` +
+    `- SYS en escrow: ${estadoActual.balance}/${estadoActual.threshold}\n` +
+    `- Donantes: ${estadoActual.totalDonantes}\n` +
+    `- Días activo: ${estadoActual.diasActivo}\n`;
+
+  const mensajeUsuario = textoExtra || message.content;
+  history.push({ role: "user", content: mensajeUsuario + contexto });
+  if (history.length > 10) history.splice(0, history.length - 10);
+
+  const response = await anthropic.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 600,
+    system: SOUL,
+    messages: history,
+  });
+
+  const reply = response.content[0].text;
+  history.push({ role: "assistant", content: reply });
+  return reply;
+}
+
+// ============================================================
+//  EVENTOS DEL BOT
+// ============================================================
 client.once(Events.ClientReady, (c) => {
-  console.log(`\n🐾 ══════════════════════════════════`);
-  console.log(`🐾  YEICO online: ${c.user.tag}`);
-  console.log(`⛓️   Agente activo en zkSYS testnet`);
+  console.log(`\n🐾 ════════════════════════════════════`);
+  console.log(`🐾  YEICO v2.0 online: ${c.user.tag}`);
+  console.log(`⛓️   Agente autónomo activo — zkSYS testnet`);
   console.log(`💬  Canal: #${process.env.CHANNEL_NAME || "rescuepaw"}`);
-  console.log(`📋  Comandos: !yeico !estado !madrinas !ayuda !wallet !demo`);
-  console.log(`🐾 ══════════════════════════════════\n`);
+  console.log(`🤖  Modo: AUTÓNOMO (sin intervención humana)`);
+  console.log(`📋  Comandos: !estado !ayuda !alimentar !donar`);
+  console.log(`🐾 ════════════════════════════════════\n`);
 
   c.user.setPresence({
-    activities: [{ name: "🐾 zkSYS Blockchain | !yeico", type: ActivityType.Watching }],
+    activities: [{ name: "🐾 Agente Autónomo | zkSYS | !ayuda", type: ActivityType.Watching }],
     status: "online",
   });
 });
@@ -171,56 +460,72 @@ client.once(Events.ClientReady, (c) => {
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  const canalObjetivo = process.env.CHANNEL_NAME || "rescuepaw";
-  const esCanalCorrecto = message.channel.name === canalObjetivo;
-  const esDM = message.channel.type === 1;
-  if (!esCanalCorrecto && !esDM) return;
+  const canal = process.env.CHANNEL_NAME || "rescuepaw";
+  if (message.channel.name !== canal && message.channel.type !== 1) return;
 
-  const texto = message.content.trim();
+  const texto = message.content.trim().toLowerCase();
   const userId = message.author.id;
 
-  const cmd = getComando(texto.toLowerCase(), userId);
-  if (cmd) {
-    await message.reply(cmd);
-    return;
-  }
-
-  await message.channel.sendTyping();
-
-  if (!userHistory.has(userId)) userHistory.set(userId, []);
-  const history = userHistory.get(userId);
-
-  let systemFinal = SOUL;
-  if (esMadrina(texto)) {
-    const txData = simularTransaccion(userId);
-    systemFinal = SOUL + "\n\n== INSTRUCCION ESPECIAL ==\n" + buildPromptTx(texto, txData);
-  }
-
-  history.push({ role: "user", content: texto });
-  if (history.length > 12) history.splice(0, history.length - 12);
-
   try {
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 700,
-      system: systemFinal,
-      messages: history,
-    });
-
-    const reply = response.content[0].text;
-    history.push({ role: "assistant", content: reply });
-
-    if (reply.length <= 2000) {
-      await message.reply(reply);
-    } else {
-      const partes = reply.match(/.{1,1950}(\n|$)/g) || [reply];
-      for (const parte of partes) await message.channel.send(parte.trim());
+    // ── Comandos principales ──────────────────────────────
+    if (texto === "!estado") {
+      return message.reply(responderEstado());
     }
 
-    console.log(`[${new Date().toLocaleTimeString()}] @${message.author.username}: "${texto.substring(0, 60)}"`);
+    if (texto === "!ayuda") {
+      return message.reply(responderAyuda());
+    }
+
+    if (texto === "!donar") {
+      return message.reply(responderDonar());
+    }
+
+    if (texto.startsWith("!alimentar")) {
+      return await procesarAlimentar(message);
+    }
+
+    // ── Comando de donación simulada (para demo) ──────────
+    // Uso: !simulardonacion 5  → dona 5 SYS de prueba
+    if (texto.startsWith("!simulardonacion")) {
+      const partes = texto.split(" ");
+      const cantidad = parseFloat(partes[1]) || 2;
+      const resultado = await Agente.procesarDonacion(userId, cantidad);
+      const e = Agente.leerEscrow();
+
+      let respuesta = `*salta de alegría*\n\n` +
+        `⛓️ **DONACIÓN REGISTRADA EN zkSYS**\n` +
+        `💰 Cantidad: **${cantidad} SYS**\n` +
+        `📝 TX Hash: \`${resultado.tx.txHash}\`\n` +
+        `💾 Nuevo balance escrow: **${e.balance} SYS**\n\n` +
+        `${e.barra} ${e.balance}/${e.threshold} SYS\n` +
+        `Faltan **${e.falta} SYS** para la compra automática.\n\n` +
+        `¡Gracias! El agente registró tu donación solo, sin que nadie del equipo interviniera. 🐾`;
+
+      if (resultado.pagoEjecutado) {
+        const p = resultado.pagoEjecutado;
+        respuesta += `\n\n🎉 **¡PAGO AUTOMÁTICO EJECUTADO!**\n` +
+          `\`\`\`\nMonto: ${p.monto} SYS → ${p.walletDestino}\nTX: ${p.txHash}\nAprobado por humanos: NO\n\`\`\``;
+      }
+
+      return message.reply(respuesta);
+    }
+
+    // ── Mensaje libre → responder con IA como YEICO ───────
+    await message.channel.sendTyping();
+    const respuesta = await responderConIA(message);
+
+    if (respuesta.length <= 2000) {
+      message.reply(respuesta);
+    } else {
+      const partes = respuesta.match(/.{1,1950}(\n|$)/g) || [respuesta];
+      for (const p of partes) await message.channel.send(p.trim());
+    }
+
+    console.log(`[${new Date().toLocaleTimeString()}] @${message.author.username}: "${message.content.substring(0, 50)}"`);
+
   } catch (err) {
-    console.error("Error:", err.message);
-    await message.reply("*se rasca la orejita* Tuve un problemita... puedes repetir? 🐾");
+    console.error("❌ Error del agente:", err.message);
+    message.reply("*se rasca la orejita* Tuve un error interno... intentalo de nuevo? 🐾");
   }
 });
 
