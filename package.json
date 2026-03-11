@@ -1,0 +1,19 @@
+{
+  "name": "yeico-rescuepaw-agent",
+  "version": "1.0.0",
+  "description": "Agente Autonomo YEICO — RescuePaw Labs Hackathon 2026",
+  "main": "yeico-bot.js",
+  "scripts": {
+    "start": "node yeico-bot.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.20.0",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.6.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "RescuePaw Labs — Kiara, Connie, Allison, Yadhira, Jesus",
+  "license": "MIT"
+}
