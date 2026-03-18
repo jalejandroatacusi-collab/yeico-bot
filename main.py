@@ -2,56 +2,48 @@ import os
 import asyncio
 import threading
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
 from core.agent import YeicoAgent
 from clients.discord import run_discord_bot
 
-# --- NUEVO: Modelo para recibir los eventos del bot ---
-class EventRequest(BaseModel):
-    type: str
-    payload: Dict[str, Any]
-
-# 1. Configuración de FastAPI
 app = FastAPI(title="Yeico Agent API")
+
+# Modelo actualizado según tus logs reales
+class DiscordEvent(BaseModel):
+    type: str
+    source: str
+    dog_id: Optional[str] = None
+    wallet: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    image: Optional[str] = None
 
 @app.on_event("startup")
 async def startup_event():
     print("--- [SISTEMA] Iniciando hilo de Discord desde Startup ---")
-    thread = threading.Thread(target=start_discord, daemon=True)
-    thread.start()
+    threading.Thread(target=start_discord, daemon=True).start()
 
 @app.get("/")
 async def health_check():
-    """Ruta para que Railway sepa que la app está viva"""
-    return {
-        "status": "Yeico Agent Online",
-        "port": os.environ.get("PORT", "8080"),
-        "environment": "Railway"
-    }
+    return {"status": "Yeico Agent Online", "environment": "Railway"}
 
-# --- Endpoint para manejar eventos del bot ---
 @app.post("/event")
-async def handle_event(request: Request):
-    """Maneja peticiones POST aceptando cualquier estructura JSON"""
-    try:
-        # Extraemos el JSON crudo para ver qué trae
-        data = await request.json()
-        print(f"--- [API] Datos recibidos del bot: {data} ---")
+async def handle_event(event: DiscordEvent):
+    """Maneja los eventos validados de Discord"""
+    print(f"--- [API] Procesando evento: {event.type} de {event.source} ---")
+    
+    if event.type == "FEEDING":
+        print(f"Alimentando... Wallet: {event.wallet}")
+        # Aquí llamarías a: agent.process_feeding(event.wallet)
         
-        # Aquí puedes procesar la lógica según lo que venga en 'data'
-        return {"status": "success", "received_data": data}
-        
-    except Exception as e:
-        print(f"--- [API] Error al procesar JSON: {e} ---")
-        return {"status": "error", "message": str(e)}
+    elif event.type == "DONATE":
+        print(f"Donación recibida. Monto: {event.metadata.get('amount') if event.metadata else 0}")
 
-# 2. Función envoltorio para el Bot de Discord
+    return {"status": "processed", "type": event.type}
+
 def start_discord():
-    """Ejecuta el bot de Discord en un nuevo bucle de eventos"""
     print("--- Intentando iniciar hilo de Discord ---")
     try:
         loop = asyncio.new_event_loop()
@@ -60,11 +52,6 @@ def start_discord():
     except Exception as e:
         print(f"--- ERROR CRÍTICO EN HILO DISCORD: {e} ---")
 
-# 3. Punto de entrada principal
 if __name__ == "__main__":
-    if not os.getenv("DISCORD_TOKEN"):
-        print("ERROR: La variable DISCORD_TOKEN no está configurada en Railway.")
-    
     port = int(os.environ.get("PORT", 8080))
-    print(f"--- Iniciando Uvicorn en el puerto {port} ---")
     uvicorn.run(app, host="0.0.0.0", port=port)
