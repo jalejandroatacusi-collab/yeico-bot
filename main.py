@@ -31,17 +31,33 @@ async def health_check():
 
 @app.post("/event")
 async def handle_event(event: DiscordEvent):
-    """Maneja los eventos validados de Discord"""
+    """Maneja los eventos validados de Discord con el formato esperado"""
     print(f"--- [API] Procesando evento: {event.type} de {event.source} ---")
     
+    # Preparamos una respuesta base que el bot entienda
+    response_data = {
+        "decision": "accepted", # Esto quita el UNKNOWN
+        "action": event.type,
+        "dog_id": event.dog_id or "General",
+        "message": ""
+    }
+
     if event.type == "FEEDING":
         print(f"Alimentando... Wallet: {event.wallet}")
-        # Aquí llamarías a: agent.process_feeding(event.wallet)
+        response_data["message"] = f"¡Alimentación registrada! Wallet: {event.wallet}"
         
-    elif event.type == "DONATE":
-        print(f"Donación recibida. Monto: {event.metadata.get('amount') if event.metadata else 0}")
+    elif event.type == "REGISTER":
+        response_data["message"] = "¡Perro registrado exitosamente en el sistema!"
+        response_data["dog_id"] = "NUEVO_ID" # Aquí podrías generar un ID real
 
-    return {"status": "processed", "type": event.type}
+    elif event.type == "DONATE":
+        amount = event.metadata.get('amount', 0) if event.metadata else 0
+        response_data["message"] = f"Gracias por tu donación de {amount} SYS."
+        
+    elif event.type == "STATUS":
+        response_data["message"] = "El sistema Yeico Rescue Paw está operando normalmente."
+
+    return response_data
 
 def start_discord():
     print("--- Intentando iniciar hilo de Discord ---")

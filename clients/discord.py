@@ -178,7 +178,7 @@ async def forward_to_agent(event: dict) -> dict:
 
 
 def format_response(response: dict) -> str:
-    decision = response.get("decision", "unknown")
+    decision = response.get("decision", "error").lower()
 
     if decision == "accepted":
         emoji = "✅"
