@@ -5,10 +5,15 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from core.agent import YeicoAgent
 from clients.discord import run_discord_bot
+
+# --- NUEVO: Modelo para recibir los eventos del bot ---
+class EventRequest(BaseModel):
+    type: str
+    payload: Dict[str, Any]
 
 # 1. Configuración de FastAPI
 app = FastAPI(title="Yeico Agent API")
@@ -28,12 +33,25 @@ async def health_check():
         "environment": "Railway"
     }
 
+# --- NUEVO: Endpoint para solucionar el error 404 /event ---
+@app.post("/event")
+async def handle_event(event: EventRequest):
+    """Maneja las peticiones POST que el bot envía a la API"""
+    print(f"--- [API] Evento recibido: {event.type} ---")
+    
+    # Aquí puedes añadir lógica según el tipo de evento
+    if event.type == "register":
+        # Lógica para registrar usuario (puedes conectar con YeicoAgent aquí)
+        print(f"Datos de registro: {event.payload}")
+        return {"status": "success", "message": "Registro procesado"}
+        
+    return {"status": "received", "type": event.type}
+
 # 2. Función envoltorio para el Bot de Discord
 def start_discord():
     """Ejecuta el bot de Discord en un nuevo bucle de eventos"""
     print("--- Intentando iniciar hilo de Discord ---")
     try:
-        # Creamos un nuevo loop de asyncio para este hilo específico
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(run_discord_bot())
@@ -42,17 +60,9 @@ def start_discord():
 
 # 3. Punto de entrada principal
 if __name__ == "__main__":
-    # Verificación de variables críticas antes de arrancar
     if not os.getenv("DISCORD_TOKEN"):
         print("ERROR: La variable DISCORD_TOKEN no está configurada en Railway.")
     
-    # Lanzar el hilo de Discord (Daemon=True para que cierre si el proceso principal muere)
-    discord_thread = threading.Thread(target=start_discord, daemon=True)
-    discord_thread.start()
-    
-    # Configuración del puerto de Railway
     port = int(os.environ.get("PORT", 8080))
-    
     print(f"--- Iniciando Uvicorn en el puerto {port} ---")
-    # Ejecutar el servidor web (Bloquea el hilo principal, manteniendo la app viva)
     uvicorn.run(app, host="0.0.0.0", port=port)
