@@ -2,7 +2,10 @@ import os
 import discord
 import httpx
 
-AGENT_API_URL = os.getenv("AGENT_API_URL", "http://localhost:8000")
+AGENT_API_URL = os.getenv("AGENT_API_URL")
+
+if not AGENT_API_URL:
+    raise ValueError("AGENT_API_URL is not set")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_NAME = os.getenv("CHANNEL_NAME", "rescuepaw")
 
