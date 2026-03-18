@@ -13,6 +13,12 @@ from clients.discord import run_discord_bot
 # 1. Configuración de FastAPI
 app = FastAPI(title="Yeico Agent API")
 
+@app.on_event("startup")
+async def startup_event():
+    print("--- [SISTEMA] Iniciando hilo de Discord desde Startup ---")
+    thread = threading.Thread(target=start_discord, daemon=True)
+    thread.start()
+
 @app.get("/")
 async def health_check():
     """Ruta para que Railway sepa que la app está viva"""
