@@ -9,3 +9,5 @@ from typing import Optional
 
 from core.agent import YeicoAgent
 from clients.discord import run_discord_bot
+
+app = FastAPI() 
