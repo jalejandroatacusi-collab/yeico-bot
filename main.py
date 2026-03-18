@@ -33,19 +33,21 @@ async def health_check():
         "environment": "Railway"
     }
 
-# --- NUEVO: Endpoint para solucionar el error 404 /event ---
+# --- Endpoint para manejar eventos del bot ---
 @app.post("/event")
-async def handle_event(event: EventRequest):
-    """Maneja las peticiones POST que el bot envía a la API"""
-    print(f"--- [API] Evento recibido: {event.type} ---")
-    
-    # Aquí puedes añadir lógica según el tipo de evento
-    if event.type == "register":
-        # Lógica para registrar usuario (puedes conectar con YeicoAgent aquí)
-        print(f"Datos de registro: {event.payload}")
-        return {"status": "success", "message": "Registro procesado"}
+async def handle_event(request: Request):
+    """Maneja peticiones POST aceptando cualquier estructura JSON"""
+    try:
+        # Extraemos el JSON crudo para ver qué trae
+        data = await request.json()
+        print(f"--- [API] Datos recibidos del bot: {data} ---")
         
-    return {"status": "received", "type": event.type}
+        # Aquí puedes procesar la lógica según lo que venga en 'data'
+        return {"status": "success", "received_data": data}
+        
+    except Exception as e:
+        print(f"--- [API] Error al procesar JSON: {e} ---")
+        return {"status": "error", "message": str(e)}
 
 # 2. Función envoltorio para el Bot de Discord
 def start_discord():
